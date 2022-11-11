@@ -1,0 +1,227 @@
+#include <LiquidCrystal.h>
+#include <Keypad.h>
+#include <SoftwareSerial.h>
+
+#define led_turn 8
+#define buzz_pin 34
+
+#define RS 7
+#define E  6
+#define D7 5
+#define D6 4
+#define D5 3
+#define D4 2
+LiquidCrystal lcd (RS, E, D4, D5, D6, D7);
+
+const byte ROWS = 4; //four rows
+const byte COLS = 3; //three columns
+char keys[ROWS][COLS] = {
+  {'1', '2', '3'},
+  {'4', '5', '6'},
+  {'7', '8', '9'},
+  {'*', '0', '#'}
+};
+byte rowPins[ROWS] = {25, 26, 27, 28}; //connect to the row pinouts of the keypad
+byte colPins[COLS] = {24, 23, 22}; //connect to the column pinouts of the keypad
+Keypad keyPad = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS );
+
+SoftwareSerial XBeeSerial(10, 11); // RX, TX
+
+
+int X_turn = 1;
+int O_turn = 0;
+int endGame_bit = 0;
+char board[3][3] = {
+  {' ', ' ', ' '},
+  {' ', ' ', ' '},
+  {' ', ' ', ' '}  
+};
+String input_location;
+int x_location, y_location;
+char winner;
+
+void setup() {
+  // put your setup code here, to run once:
+  lcd.begin(16, 4);
+  lcdPrint();
+
+  pinMode(led_turn, OUTPUT);
+  digitalWrite(led_turn, LOW);
+  
+  Serial.begin(9600);
+  XBeeSerial.begin(9600);
+
+  input_location = "(x:- ,y:-)";
+}
+
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  
+  if(endGame_bit == 0){
+    
+    if(O_turn == 0){
+      String receive_data = receiveDataFromXBee();
+      int tmp_O_turn = receive_data.charAt(1) - '0';
+      if(tmp_O_turn == 1){
+        updateWithReceiveData(receive_data);
+      }
+    }
+    
+    char key = keyPad.getKey();
+    if(key){
+      if(O_turn == 1){
+        if(key == '0' or key == '1' or key == '2'){
+          x_location = key - '0';
+          char key2 = keyPad.waitForKey();
+          if(key2 == '0' or key2 == '1' or key2 == '2'){
+            y_location = key2 - '0';
+            input_location = "(x:" + String(x_location) + " ,y:" + String(y_location) + ")";
+          }
+          
+        }else if(key == '*'){
+          if(board[x_location][y_location] == ' '){
+            board[x_location][y_location] = 'O';
+            X_turn = 1;
+            O_turn = 0;
+            sendDataToXBee();
+          }
+          input_location = "(x:- ,y:-)";
+        
+        }else if(key == '#'){
+          input_location = "(x:- ,y:-)";
+        }
+      }
+    }
+  }
+  
+  lcdPrint();
+  if(checkWin() == true){
+    endGame_bit = 1;
+    tone(buzz_pin, 100);
+    delay(200);
+  }
+  
+  setLED();
+}
+
+//-------------------------------------------------------------
+void lcdPrint(){
+  String line1 = "|";
+  String line2 = "|";
+  String line3 = "|";
+  for(int i = 0; i < 3; i++){
+    line1 += board[0][i];
+    line1 += "|";
+    line2 += board[1][i];
+    line2 += "|";
+    line3 += board[2][i];
+    line3 += "|";
+  }
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(line1);
+  lcd.setCursor(0, 1);
+  lcd.print(line2);
+  lcd.setCursor(0, 2);
+  lcd.print(line3);
+  lcd.setCursor(0, 3);
+  if(checkWin() == true){
+    lcd.print("End -> Winner: " + String(winner));
+  }else{
+    lcd.print(input_location);
+  }
+
+  delay(100);
+}
+
+void sendDataToXBee(){
+  String send_data = "";
+  send_data += String(X_turn);
+  send_data += String(O_turn);
+  for(int i = 0; i < 3; i++){
+    for(int j = 0; j < 3; j++){
+      send_data += String(board[i][j]);
+    }
+  }
+
+  Serial.println("send:");
+  Serial.println(send_data);
+  Serial.println("/");
+  
+  for(int i = 0; i < 11; i++){
+      byte b = send_data.charAt(i);
+      XBeeSerial.write(b);
+  }
+}
+
+String receiveDataFromXBee(){
+   String receive_data = "";
+   for(int i = 0; i < 11; i++){
+      if(XBeeSerial.available()){
+        char c = XBeeSerial.read();
+        receive_data += String(c);
+      }
+   }
+
+
+  Serial.println("receive:");
+  Serial.println(receive_data);
+  Serial.println("/");
+
+  return receive_data;
+}
+
+void updateWithReceiveData(String receive_data){
+   X_turn = receive_data.charAt(0) - '0';
+   O_turn = receive_data.charAt(1) - '0';
+   int index = 2;
+   for(int i = 0; i < 3; i++){
+    for(int j = 0; j < 3; j++){
+      board[i][j] = receive_data.charAt(index);
+      index++;
+    }
+   }
+}
+
+bool checkWin(){
+  bool win_flag = false;
+  
+  for(int i = 0; i < 3; i++){
+    // check rows
+    if((board[i][0] == board[i][1]) and (board[i][1] == board[i][2]) and (board[i][2] != ' ')){
+      winner = board[i][2];
+      win_flag = true;
+    }
+    //check columns
+    if((board[0][i] == board[1][i]) and (board[1][i] == board[2][i]) and (board[2][i] != ' ')){
+      winner = board[2][i];
+      win_flag = true;
+    }
+  }
+
+  //check diagonals
+  if((board[0][0] == board[1][1]) and (board[1][1] == board[2][2]) and (board[2][2] != ' ')){
+    winner = board[2][2];
+    win_flag = true;
+  }
+  if((board[0][2] == board[1][1]) and (board[1][1] == board[2][0]) and (board[2][0] != ' ')){
+    winner = board[2][0];
+    win_flag = true;
+  }
+
+  return win_flag;  
+}
+
+void setLED(){
+  if(endGame_bit == 0){
+    if(O_turn == 1){
+      digitalWrite(led_turn, HIGH);
+    }else{
+      digitalWrite(led_turn, LOW);
+    } 
+  }else{
+    digitalWrite(led_turn, LOW);
+  }
+}
